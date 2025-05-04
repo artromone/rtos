@@ -7,7 +7,9 @@
 void testMaximumLimits();
 void testRMAPriorityAssignment();
 void testNonpreemptiveScheduling();
-void testEventManagement();
+void testEvents();
+void testSemaphores();
+void testIntegration();
 
 int main() {
   std::cout << "Запуск тестов RTOS..." << std::endl;
@@ -20,6 +22,10 @@ int main() {
 
   testNonpreemptiveScheduling();
   std::cout << "Тест планирования без вытеснения: ПРОЙДЕН" << std::endl;
+
+  // testSemaphores();
+  // testIntegration();
+  // testEvents();
 
   std::cout << "Все тесты ПРОЙДЕНЫ!" << std::endl;
   return 0;

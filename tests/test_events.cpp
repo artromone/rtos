@@ -4,27 +4,58 @@
 #include <chrono>
 #include <thread>
 
-void testEventManagement() {
+void testEvents() {
   RTOS::Scheduler scheduler;
+  RTOS::SystemLog &logger = RTOS::SystemLog::getInstance();
+  logger.clearLog();
 
-  bool task2Executed = false;
+  bool ownerTaskExecuted = false;
+  bool waitingTask1Executed = false;
+  bool waitingTask2Executed = false;
 
-  auto task1 = scheduler.createTask(1, 100, []() {});
-  auto task2 = scheduler.createTask(0, 200, [&]() { task2Executed = true; });
+  RTOS::Task *ownerTask = nullptr;
 
-  auto event = scheduler.createEvent(task1);
+  // Создаем задачу-владельца события
+  ownerTask = scheduler.createTask(0, 100, [&]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    ownerTaskExecuted = true;
 
-  // Task2 ожидает событие
-  event->waitFor(task2);
-  assert(!task2->isReady());
+    // Активируем событие
+    auto events = ownerTask->getEvents();
+    assert(!events.empty());
+    events[0]->trigger();
+  });
 
-  // Task1 активирует событие
-  event->trigger();
-  assert(task2->isReady());
+  // Создаем событие, принадлежащее ownerTask
+  auto event = scheduler.createEvent(ownerTask);
+  assert(event != nullptr);
+  assert(event->getOwner() == ownerTask);
 
+  // Создаем задачи, ожидающие событие
+  auto waitingTask1 =
+      scheduler.createTask(0, 200, [&]() { waitingTask1Executed = true; });
+
+  auto waitingTask2 =
+      scheduler.createTask(0, 300, [&]() { waitingTask2Executed = true; });
+
+  // Задачи ожидают событие
+  event->waitFor(waitingTask1);
+  event->waitFor(waitingTask2);
+
+  // Проверяем, что задачи перешли в состояние ожидания
+  assert(!waitingTask1->isReady());
+  assert(!waitingTask2->isReady());
+
+  // Запускаем планировщик
   scheduler.start();
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   scheduler.stop();
 
-  assert(task2Executed);
+  // Проверяем, что все задачи выполнились
+  assert(ownerTaskExecuted);
+  assert(waitingTask1Executed);
+  assert(waitingTask2Executed);
+
+  // Проверяем, что событие было активировано
+  assert(event->isTriggered());
 }
