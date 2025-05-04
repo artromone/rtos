@@ -88,8 +88,10 @@ void Scheduler::start() {
             [](Task *a, Task *b) { return a->getPeriod() < b->getPeriod(); });
 
   // Обновление приоритетов на основе RMA
-  for (size_t i = 0; i < tasks.size() && i < MAX_PRIORITIES; ++i) {
-    int rmaPriority = MAX_PRIORITIES - 1 - static_cast<int>(i);
+
+  for (size_t i = 0; i < tasks.size(); ++i) {
+    int rmaPriority = std::min(MAX_PRIORITIES - 1, static_cast<int>(i));
+    rmaPriority = MAX_PRIORITIES - 1 - rmaPriority;
     tasks[i]->setPriority(rmaPriority);
     logger.logEvent("Task " + std::to_string(tasks[i]->getId()) +
                     " RMA priority set to " + std::to_string(rmaPriority));

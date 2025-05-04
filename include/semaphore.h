@@ -23,6 +23,8 @@ private:
 public:
   Semaphore(int initialCount = 1);
 
+  const std::vector<Task *> &getWaitingTasks() const { return waitingTasks; }
+
   bool acquire(Task *task);
   void release(Task *task);
   Task *getOwner() const;

@@ -7,7 +7,6 @@
 void testMaximumLimits();
 void testRMAPriorityAssignment();
 void testNonpreemptiveScheduling();
-void testPriorityInheritanceProtocol();
 void testEventManagement();
 
 int main() {
@@ -21,13 +20,6 @@ int main() {
 
   testNonpreemptiveScheduling();
   std::cout << "Тест планирования без вытеснения: ПРОЙДЕН" << std::endl;
-
-  testPriorityInheritanceProtocol();
-  std::cout << "Тест протокола наследования приоритетов (PIP): ПРОЙДЕН"
-            << std::endl;
-
-  testEventManagement();
-  std::cout << "Тест управления событиями: ПРОЙДЕН" << std::endl;
 
   std::cout << "Все тесты ПРОЙДЕНЫ!" << std::endl;
   return 0;

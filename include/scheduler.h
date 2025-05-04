@@ -27,6 +27,11 @@ public:
   Scheduler();
   ~Scheduler();
 
+  static Scheduler &getInstance() {
+    static Scheduler instance;
+    return instance;
+  }
+
   Task *createTask(int priority, int period,
                    std::function<void()> taskFunction);
   Semaphore *createSemaphore();

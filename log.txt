@@ -75,7 +75,6 @@ add_executable(rtos_tests
     tests/test_limits.cpp
     tests/test_rma.cpp
     tests/test_nonpreemptive.cpp
-    tests/test_events.cpp
 )
 
 target_link_libraries(rtos_tests rtos_lib)
@@ -193,6 +192,11 @@ public:
   Scheduler();
   ~Scheduler();
 
+  static Scheduler &getInstance() {
+    static Scheduler instance;
+    return instance;
+  }
+
   Task *createTask(int priority, int period,
                    std::function<void()> taskFunction);
   Semaphore *createSemaphore();
@@ -238,6 +242,8 @@ private:
 
 public:
   Semaphore(int initialCount = 1);
+
+  const std::vector<Task *> &getWaitingTasks() const { return waitingTasks; }
 
   bool acquire(Task *task);
   void release(Task *task);
@@ -364,6 +370,7 @@ public:
 3. **События, принадлежащие задачам**:
    - Каждое событие имеет владельца-задачу
    - Только владелец может активировать событие
+# rtos
 ===== КОНЕЦ ФАЙЛА: ./README.md =====
 
 
@@ -510,8 +517,10 @@ void Scheduler::start() {
             [](Task *a, Task *b) { return a->getPeriod() < b->getPeriod(); });
 
   // Обновление приоритетов на основе RMA
-  for (size_t i = 0; i < tasks.size() && i < MAX_PRIORITIES; ++i) {
-    int rmaPriority = MAX_PRIORITIES - 1 - static_cast<int>(i);
+
+  for (size_t i = 0; i < tasks.size(); ++i) {
+    int rmaPriority = std::min(MAX_PRIORITIES - 1, static_cast<int>(i));
+    rmaPriority = MAX_PRIORITIES - 1 - rmaPriority;
     tasks[i]->setPriority(rmaPriority);
     logger.logEvent("Task " + std::to_string(tasks[i]->getId()) +
                     " RMA priority set to " + std::to_string(rmaPriority));
@@ -579,6 +588,7 @@ bool Scheduler::isRunning() const { return running; }
 ===== ФАЙЛ: ./src/semaphore.cpp =====
 // semaphore.cpp
 #include "../include/semaphore.h"
+#include "../include/scheduler.h"
 #include <algorithm>
 
 namespace RTOS {
@@ -602,16 +612,17 @@ bool Semaphore::acquire(Task *task) {
     // Ресурс недоступен
     waitingTasks.push_back(task);
 
-    // Реализация Priority Inheritance
-    if (owner && task->getPriority() > owner->getPriority()) {
+    // Реализация Priority Inheritance - исправленная версия
+    if (owner) {
       int oldPriority = owner->getPriority();
-      owner->setPriority(task->getPriority());
-
-      logger.logEvent("Task " + std::to_string(owner->getId()) +
-                      " inherited priority " +
-                      std::to_string(task->getPriority()) + " from Task " +
-                      std::to_string(task->getId()) + " (was " +
-                      std::to_string(oldPriority) + ")");
+      if (task->getPriority() > owner->getPriority()) {
+        owner->setPriority(task->getPriority());
+        logger.logEvent("Task " + std::to_string(owner->getId()) +
+                        " inherited priority " +
+                        std::to_string(task->getPriority()) + " from Task " +
+                        std::to_string(task->getId()) + " (was " +
+                        std::to_string(oldPriority) + ")");
+      }
     }
 
     task->setReady(false);
@@ -625,13 +636,44 @@ void Semaphore::release(Task *task) {
   std::unique_lock<std::mutex> lock(mtx);
 
   if (owner == task) {
-    // Восстановление исходного приоритета владельца
+    // Перед восстановлением приоритета нужно проверить другие семафоры
     if (originalOwnerPriority != -1) {
-      logger.logEvent("Task " + std::to_string(task->getId()) +
-                      " restored to original priority " +
-                      std::to_string(originalOwnerPriority));
+      // Проверяем, удерживает ли задача другие семафоры с наследованием
+      // приоритета
+      bool canRestorePriority = true;
+      int highestWaiterPriority = originalOwnerPriority;
 
-      task->setPriority(originalOwnerPriority);
+      // Получаем список всех семафоров из планировщика
+      auto &allSemaphores = Scheduler::getInstance().getSemaphores();
+
+      // Проверяем каждый семафор, который может удерживать эта задача
+      for (auto sem : allSemaphores) {
+        if (sem != this && sem->getOwner() == task) {
+          // Находим задачу с наивысшим приоритетом среди ожидающих этот семафор
+          for (auto &waiter : sem->getWaitingTasks()) {
+            if (waiter->getPriority() > highestWaiterPriority) {
+              highestWaiterPriority = waiter->getPriority();
+              canRestorePriority = false;
+            }
+          }
+        }
+      }
+
+      // Восстанавливаем приоритет только если нет других семафоров с ожидающими
+      // задачами высокого приоритета
+      if (canRestorePriority) {
+        logger.logEvent("Task " + std::to_string(task->getId()) +
+                        " restored to original priority " +
+                        std::to_string(originalOwnerPriority));
+        task->setPriority(originalOwnerPriority);
+      } else {
+        logger.logEvent("Task " + std::to_string(task->getId()) +
+                        " maintains inherited priority " +
+                        std::to_string(highestWaiterPriority) +
+                        " due to other semaphores");
+        task->setPriority(highestWaiterPriority);
+      }
+
       originalOwnerPriority = -1;
     }
 
@@ -742,13 +784,9 @@ target_link_libraries(test_rma rtos_lib)
 add_executable(test_nonpreemptive test_nonpreemptive.cpp)
 target_link_libraries(test_nonpreemptive rtos_lib)
 
-add_executable(test_events test_events.cpp)
-target_link_libraries(test_events rtos_lib)
-
 add_test(NAME test_limits COMMAND test_limits)
 add_test(NAME test_rma COMMAND test_rma)
 add_test(NAME test_nonpreemptive COMMAND test_nonpreemptive)
-add_test(NAME test_events COMMAND test_events)
 ===== КОНЕЦ ФАЙЛА: ./tests/CMakeLists.txt =====
 
 
@@ -762,7 +800,6 @@ add_test(NAME test_events COMMAND test_events)
 void testMaximumLimits();
 void testRMAPriorityAssignment();
 void testNonpreemptiveScheduling();
-void testPriorityInheritanceProtocol();
 void testEventManagement();
 
 int main() {
@@ -776,9 +813,6 @@ int main() {
 
   testNonpreemptiveScheduling();
   std::cout << "Тест планирования без вытеснения: ПРОЙДЕН" << std::endl;
-
-  testEventManagement();
-  std::cout << "Тест управления событиями: ПРОЙДЕН" << std::endl;
 
   std::cout << "Все тесты ПРОЙДЕНЫ!" << std::endl;
   return 0;

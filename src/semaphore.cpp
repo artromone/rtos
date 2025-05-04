@@ -1,5 +1,6 @@
 // semaphore.cpp
 #include "../include/semaphore.h"
+#include "../include/scheduler.h"
 #include <algorithm>
 
 namespace RTOS {
@@ -47,13 +48,44 @@ void Semaphore::release(Task *task) {
   std::unique_lock<std::mutex> lock(mtx);
 
   if (owner == task) {
-    // Восстановление исходного приоритета владельца
+    // Перед восстановлением приоритета нужно проверить другие семафоры
     if (originalOwnerPriority != -1) {
-      logger.logEvent("Task " + std::to_string(task->getId()) +
-                      " restored to original priority " +
-                      std::to_string(originalOwnerPriority));
+      // Проверяем, удерживает ли задача другие семафоры с наследованием
+      // приоритета
+      bool canRestorePriority = true;
+      int highestWaiterPriority = originalOwnerPriority;
 
-      task->setPriority(originalOwnerPriority);
+      // Получаем список всех семафоров из планировщика
+      auto &allSemaphores = Scheduler::getInstance().getSemaphores();
+
+      // Проверяем каждый семафор, который может удерживать эта задача
+      for (auto sem : allSemaphores) {
+        if (sem != this && sem->getOwner() == task) {
+          // Находим задачу с наивысшим приоритетом среди ожидающих этот семафор
+          for (auto &waiter : sem->getWaitingTasks()) {
+            if (waiter->getPriority() > highestWaiterPriority) {
+              highestWaiterPriority = waiter->getPriority();
+              canRestorePriority = false;
+            }
+          }
+        }
+      }
+
+      // Восстанавливаем приоритет только если нет других семафоров с ожидающими
+      // задачами высокого приоритета
+      if (canRestorePriority) {
+        logger.logEvent("Task " + std::to_string(task->getId()) +
+                        " restored to original priority " +
+                        std::to_string(originalOwnerPriority));
+        task->setPriority(originalOwnerPriority);
+      } else {
+        logger.logEvent("Task " + std::to_string(task->getId()) +
+                        " maintains inherited priority " +
+                        std::to_string(highestWaiterPriority) +
+                        " due to other semaphores");
+        task->setPriority(highestWaiterPriority);
+      }
+
       originalOwnerPriority = -1;
     }
 

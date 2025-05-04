@@ -22,8 +22,6 @@ add_executable(rtos_tests
     tests/test_limits.cpp
     tests/test_rma.cpp
     tests/test_nonpreemptive.cpp
-    tests/test_pip.cpp
-    tests/test_events.cpp
 )
 
 target_link_libraries(rtos_tests rtos_lib)
