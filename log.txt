@@ -1,0 +1,930 @@
+
+===== ФАЙЛ: ./bash.bash =====
+#!/bin/bash
+
+# Функция для обработки файлов
+process_file() {
+  local file="$1"
+
+  # Проверяем, что это обычный файл и его можно прочитать
+  if [ -f "$file" ] && [ -r "$file" ]; then
+    echo -e "\n===== ФАЙЛ: $file ====="
+    cat "$file"
+    echo -e "===== КОНЕЦ ФАЙЛА: $file =====\n"
+  fi
+}
+
+# Функция для рекурсивного обхода каталогов
+process_directory() {
+  local dir="$1"
+
+  # Перебираем все элементы в текущем каталоге
+  for item in "$dir"/*; do
+    if [ -f "$item" ]; then
+      # Если это файл, обрабатываем его
+      process_file "$item"
+    elif [ -d "$item" ]; then
+      # Если это каталог, рекурсивно обрабатываем его
+      process_directory "$item"
+    fi
+  done
+}
+
+# Проверяем, был ли передан аргумент с путем
+if [ $# -eq 0 ]; then
+  # Если аргументов нет, используем текущий каталог
+  start_dir="."
+else
+  # Иначе используем первый аргумент как начальный каталог
+  start_dir="$1"
+fi
+
+# Проверяем, существует ли каталог
+if [ ! -d "$start_dir" ]; then
+  echo "Ошибка: '$start_dir' не является каталогом или не существует."
+  exit 1
+fi
+
+# Запускаем обработку с указанного каталога
+process_directory "$start_dir"
+===== КОНЕЦ ФАЙЛА: ./bash.bash =====
+
+
+===== ФАЙЛ: ./CMakeLists.txt =====
+# CMakeLists.txt
+cmake_minimum_required(VERSION 3.10)
+project(RTOS_Model)
+
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Основная библиотека RTOS
+add_library(rtos_lib
+    src/task.cpp
+    src/scheduler.cpp
+    src/semaphore.cpp
+    src/event.cpp
+    src/system_log.cpp
+)
+
+target_include_directories(rtos_lib PUBLIC include)
+
+# Тесты
+add_executable(rtos_tests
+    tests/main_test.cpp
+    tests/test_limits.cpp
+    tests/test_rma.cpp
+    tests/test_nonpreemptive.cpp
+    tests/test_events.cpp
+)
+
+target_link_libraries(rtos_tests rtos_lib)
+
+# Добавление опции для потоков
+find_package(Threads REQUIRED)
+target_link_libraries(rtos_lib ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(rtos_tests ${CMAKE_THREAD_LIBS_INIT})
+
+# Включение тестирования
+enable_testing()
+add_test(NAME rtos_tests COMMAND rtos_tests)
+===== КОНЕЦ ФАЙЛА: ./CMakeLists.txt =====
+
+
+===== ФАЙЛ: ./include/event.h =====
+// event.h
+#ifndef EVENT_H
+#define EVENT_H
+
+#include "system_log.h"
+#include "task.h"
+#include <vector>
+
+namespace RTOS {
+
+class Event {
+private:
+  int id;
+  Task *owner;
+  bool triggered;
+  std::vector<Task *> waitingTasks;
+  SystemLog &logger;
+
+public:
+  Event(int id, Task *owner);
+
+  int getId() const;
+  Task *getOwner() const;
+
+  void trigger();
+  void reset();
+  bool isTriggered() const;
+  void waitFor(Task *task);
+};
+
+} // namespace RTOS
+
+#endif // EVENT_H
+===== КОНЕЦ ФАЙЛА: ./include/event.h =====
+
+
+===== ФАЙЛ: ./include/rtos.h =====
+// rtos.h
+#ifndef RTOS_H
+#define RTOS_H
+
+#include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <functional>
+#include <iostream>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "event.h"
+#include "scheduler.h"
+#include "semaphore.h"
+#include "system_log.h"
+#include "task.h"
+
+namespace RTOS {
+
+// Константы системы
+constexpr int MAX_TASKS = 32;
+constexpr int MAX_PRIORITIES = 16;
+constexpr int MAX_RESOURCES = 16;
+constexpr int MAX_EVENTS = 16;
+
+} // namespace RTOS
+
+#endif // RTOS_H
+===== КОНЕЦ ФАЙЛА: ./include/rtos.h =====
+
+
+===== ФАЙЛ: ./include/scheduler.h =====
+// scheduler.h
+#ifndef SCHEDULER_H
+#define SCHEDULER_H
+
+#include "event.h"
+#include "semaphore.h"
+#include "system_log.h"
+#include "task.h"
+#include <functional>
+#include <thread>
+#include <vector>
+
+namespace RTOS {
+
+class Scheduler {
+private:
+  std::vector<Task *> tasks;
+  std::vector<Semaphore *> semaphores;
+  std::vector<Event *> events;
+  SystemLog &logger;
+  bool running;
+  std::thread schedulerThread;
+
+  void schedulerLoop();
+
+public:
+  Scheduler();
+  ~Scheduler();
+
+  Task *createTask(int priority, int period,
+                   std::function<void()> taskFunction);
+  Semaphore *createSemaphore();
+  Event *createEvent(Task *owner);
+
+  void start();
+  void stop();
+
+  const std::vector<Task *> &getTasks() const;
+  const std::vector<Semaphore *> &getSemaphores() const;
+  const std::vector<Event *> &getEvents() const;
+  bool isRunning() const;
+};
+
+} // namespace RTOS
+
+#endif // SCHEDULER_H
+===== КОНЕЦ ФАЙЛА: ./include/scheduler.h =====
+
+
+===== ФАЙЛ: ./include/semaphore.h =====
+// semaphore.h
+#ifndef SEMAPHORE_H
+#define SEMAPHORE_H
+
+#include "system_log.h"
+#include "task.h"
+#include <condition_variable>
+#include <mutex>
+#include <vector>
+
+namespace RTOS {
+
+class Semaphore {
+private:
+  std::mutex mtx;
+  std::condition_variable cv;
+  int count;
+  int originalOwnerPriority;
+  Task *owner;
+  std::vector<Task *> waitingTasks;
+  SystemLog &logger;
+
+public:
+  Semaphore(int initialCount = 1);
+
+  bool acquire(Task *task);
+  void release(Task *task);
+  Task *getOwner() const;
+};
+
+} // namespace RTOS
+
+#endif // SEMAPHORE_H
+===== КОНЕЦ ФАЙЛА: ./include/semaphore.h =====
+
+
+===== ФАЙЛ: ./include/system_log.h =====
+// system_log.h
+#ifndef SYSTEM_LOG_H
+#define SYSTEM_LOG_H
+
+#include <chrono>
+#include <ctime>
+#include <mutex>
+#include <string>
+#include <vector>
+
+namespace RTOS {
+
+class SystemLog {
+private:
+  std::vector<std::string> eventLog;
+  std::mutex logMutex;
+
+  SystemLog() = default;
+  SystemLog(const SystemLog &) = delete;
+  SystemLog &operator=(const SystemLog &) = delete;
+
+public:
+  static SystemLog &getInstance() {
+    static SystemLog instance;
+    return instance;
+  }
+
+  void logEvent(const std::string &eventDescription);
+  const std::vector<std::string> &getLog() const;
+  void clearLog();
+};
+
+} // namespace RTOS
+
+#endif // SYSTEM_LOG_H
+===== КОНЕЦ ФАЙЛА: ./include/system_log.h =====
+
+
+===== ФАЙЛ: ./include/task.h =====
+// task.h
+#ifndef TASK_H
+#define TASK_H
+
+#include <functional>
+#include <vector>
+
+namespace RTOS {
+
+class Event;
+
+class Task {
+private:
+  int id;
+  int priority;
+  int period; // Для RMA
+  bool ready;
+  std::function<void()> taskFunction;
+  std::vector<Event *> ownedEvents;
+
+public:
+  Task(int id, int priority, int period, std::function<void()> func);
+
+  int getId() const;
+  int getPriority() const;
+  void setPriority(int newPriority);
+  int getPeriod() const;
+  bool isReady() const;
+  void setReady(bool state);
+
+  void execute();
+  void addEvent(Event *event);
+  std::vector<Event *> &getEvents();
+};
+
+} // namespace RTOS
+
+#endif // TASK_H
+===== КОНЕЦ ФАЙЛА: ./include/task.h =====
+
+
+===== ФАЙЛ: ./log.txt =====
+===== КОНЕЦ ФАЙЛА: ./log.txt =====
+
+
+===== ФАЙЛ: ./README.md =====
+# Модель операционной системы реального времени
+
+Эта модель ОСРВ реализует следующие требования:
+
+- **Тип планировщика**: POSIX
+- **Алгоритм планирования**: nonpreemptive, RMA (Rate Monotonic Assignment)
+- **Управление ресурсами**: простые семафоры с поддержкой PIP
+- **Управление событиями**: события принадлежат задаче
+- **Обработка прерываний**: нет
+- **Ограничения системы**:
+  - Максимальное количество задач: 32
+  - Максимальное количество приоритетов: 16
+  - Максимальное количество ресурсов: 16
+  - Максимальное количество событий: 16
+
+Особенности реализации:
+
+1. **Планировщик RMA без вытеснения**:
+   - Задачи с меньшим периодом получают более высокий приоритет
+   - Задача выполняется до завершения, без вытеснения
+
+2. **Семафоры с PIP**:
+   - Предотвращение инверсии приоритетов
+   - Временное наследование приоритета при блокировке ресурса
+
+3. **События, принадлежащие задачам**:
+   - Каждое событие имеет владельца-задачу
+   - Только владелец может активировать событие
+===== КОНЕЦ ФАЙЛА: ./README.md =====
+
+
+===== ФАЙЛ: ./src/event.cpp =====
+// event.cpp
+#include "../include/event.h"
+
+namespace RTOS {
+
+Event::Event(int id, Task *owner)
+    : id(id), owner(owner), triggered(false), logger(SystemLog::getInstance()) {
+  if (owner) {
+    owner->addEvent(this);
+  }
+}
+
+int Event::getId() const { return id; }
+
+Task *Event::getOwner() const { return owner; }
+
+void Event::trigger() {
+  if (owner) {
+    triggered = true;
+    logger.logEvent("Event " + std::to_string(id) + " triggered by Task " +
+                    std::to_string(owner->getId()));
+
+    for (auto task : waitingTasks) {
+      task->setReady(true);
+      logger.logEvent("Task " + std::to_string(task->getId()) +
+                      " woken up by event " + std::to_string(id));
+    }
+    waitingTasks.clear();
+  }
+}
+
+void Event::reset() {
+  triggered = false;
+  logger.logEvent("Event " + std::to_string(id) + " reset");
+}
+
+bool Event::isTriggered() const { return triggered; }
+
+void Event::waitFor(Task *task) {
+  if (!triggered && task != owner) {
+    waitingTasks.push_back(task);
+    task->setReady(false);
+    logger.logEvent("Task " + std::to_string(task->getId()) +
+                    " waiting for event " + std::to_string(id));
+  }
+}
+
+} // namespace RTOS
+===== КОНЕЦ ФАЙЛА: ./src/event.cpp =====
+
+
+===== ФАЙЛ: ./src/scheduler.cpp =====
+// scheduler.cpp
+#include "../include/scheduler.h"
+#include "../include/rtos.h"
+#include <algorithm>
+
+namespace RTOS {
+
+Scheduler::Scheduler() : logger(SystemLog::getInstance()), running(false) {
+  tasks.reserve(MAX_TASKS);
+  semaphores.reserve(MAX_RESOURCES);
+  events.reserve(MAX_EVENTS);
+}
+
+Scheduler::~Scheduler() {
+  stop();
+  for (auto task : tasks)
+    delete task;
+  for (auto semaphore : semaphores)
+    delete semaphore;
+  for (auto event : events)
+    delete event;
+}
+
+Task *Scheduler::createTask(int priority, int period,
+                            std::function<void()> taskFunction) {
+  if (tasks.size() >= MAX_TASKS) {
+    logger.logEvent("ERROR: Maximum number of tasks reached");
+    return nullptr;
+  }
+
+  if (priority >= MAX_PRIORITIES) {
+    logger.logEvent("ERROR: Priority exceeds maximum allowed");
+    return nullptr;
+  }
+
+  int id = static_cast<int>(tasks.size());
+  Task *task = new Task(id, priority, period, taskFunction);
+  tasks.push_back(task);
+
+  logger.logEvent("Task " + std::to_string(id) + " created with priority " +
+                  std::to_string(priority) + " and period " +
+                  std::to_string(period));
+
+  return task;
+}
+
+Semaphore *Scheduler::createSemaphore() {
+  if (semaphores.size() >= MAX_RESOURCES) {
+    logger.logEvent("ERROR: Maximum number of semaphores reached");
+    return nullptr;
+  }
+
+  Semaphore *semaphore = new Semaphore();
+  semaphores.push_back(semaphore);
+
+  logger.logEvent("Semaphore " + std::to_string(semaphores.size() - 1) +
+                  " created");
+
+  return semaphore;
+}
+
+Event *Scheduler::createEvent(Task *owner) {
+  if (events.size() >= MAX_EVENTS) {
+    logger.logEvent("ERROR: Maximum number of events reached");
+    return nullptr;
+  }
+
+  int id = static_cast<int>(events.size());
+  Event *event = new Event(id, owner);
+  events.push_back(event);
+
+  logger.logEvent(
+      "Event " + std::to_string(id) + " created" +
+      (owner ? " owned by Task " + std::to_string(owner->getId()) : ""));
+
+  return event;
+}
+
+void Scheduler::start() {
+  if (running)
+    return;
+
+  running = true;
+  logger.logEvent("Scheduler started");
+
+  // Сортировка задач согласно RMA (меньший период = выше приоритет)
+  std::sort(tasks.begin(), tasks.end(),
+            [](Task *a, Task *b) { return a->getPeriod() < b->getPeriod(); });
+
+  // Обновление приоритетов на основе RMA
+  for (size_t i = 0; i < tasks.size() && i < MAX_PRIORITIES; ++i) {
+    int rmaPriority = MAX_PRIORITIES - 1 - static_cast<int>(i);
+    tasks[i]->setPriority(rmaPriority);
+    logger.logEvent("Task " + std::to_string(tasks[i]->getId()) +
+                    " RMA priority set to " + std::to_string(rmaPriority));
+  }
+
+  // Запуск планировщика в отдельном потоке
+  schedulerThread = std::thread([this]() { this->schedulerLoop(); });
+}
+
+void Scheduler::schedulerLoop() {
+  while (running) {
+    // Поиск готовой задачи с наивысшим приоритетом (без вытеснения)
+    Task *selectedTask = nullptr;
+
+    for (auto task : tasks) {
+      if (task->isReady()) {
+        if (!selectedTask ||
+            task->getPriority() > selectedTask->getPriority()) {
+          selectedTask = task;
+        }
+      }
+    }
+
+    if (selectedTask) {
+      logger.logEvent("Task " + std::to_string(selectedTask->getId()) +
+                      " selected for execution");
+      selectedTask->execute();
+      logger.logEvent("Task " + std::to_string(selectedTask->getId()) +
+                      " completed execution");
+    } else {
+      // Нет готовых задач
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+}
+
+void Scheduler::stop() {
+  if (!running)
+    return;
+
+  running = false;
+  logger.logEvent("Scheduler stopping");
+
+  if (schedulerThread.joinable()) {
+    schedulerThread.join();
+  }
+
+  logger.logEvent("Scheduler stopped");
+}
+
+const std::vector<Task *> &Scheduler::getTasks() const { return tasks; }
+
+const std::vector<Semaphore *> &Scheduler::getSemaphores() const {
+  return semaphores;
+}
+
+const std::vector<Event *> &Scheduler::getEvents() const { return events; }
+
+bool Scheduler::isRunning() const { return running; }
+
+} // namespace RTOS
+===== КОНЕЦ ФАЙЛА: ./src/scheduler.cpp =====
+
+
+===== ФАЙЛ: ./src/semaphore.cpp =====
+// semaphore.cpp
+#include "../include/semaphore.h"
+#include <algorithm>
+
+namespace RTOS {
+
+Semaphore::Semaphore(int initialCount)
+    : count(initialCount), owner(nullptr), originalOwnerPriority(-1),
+      logger(SystemLog::getInstance()) {}
+
+bool Semaphore::acquire(Task *task) {
+  std::unique_lock<std::mutex> lock(mtx);
+
+  if (count > 0) {
+    // Ресурс доступен
+    count--;
+    owner = task;
+    originalOwnerPriority = task->getPriority();
+    logger.logEvent("Task " + std::to_string(task->getId()) +
+                    " acquired semaphore");
+    return true;
+  } else {
+    // Ресурс недоступен
+    waitingTasks.push_back(task);
+
+    // Реализация Priority Inheritance
+    if (owner && task->getPriority() > owner->getPriority()) {
+      int oldPriority = owner->getPriority();
+      owner->setPriority(task->getPriority());
+
+      logger.logEvent("Task " + std::to_string(owner->getId()) +
+                      " inherited priority " +
+                      std::to_string(task->getPriority()) + " from Task " +
+                      std::to_string(task->getId()) + " (was " +
+                      std::to_string(oldPriority) + ")");
+    }
+
+    task->setReady(false);
+    logger.logEvent("Task " + std::to_string(task->getId()) +
+                    " waiting for semaphore");
+    return false;
+  }
+}
+
+void Semaphore::release(Task *task) {
+  std::unique_lock<std::mutex> lock(mtx);
+
+  if (owner == task) {
+    // Восстановление исходного приоритета владельца
+    if (originalOwnerPriority != -1) {
+      logger.logEvent("Task " + std::to_string(task->getId()) +
+                      " restored to original priority " +
+                      std::to_string(originalOwnerPriority));
+
+      task->setPriority(originalOwnerPriority);
+      originalOwnerPriority = -1;
+    }
+
+    owner = nullptr;
+    count++;
+
+    // Поиск задачи с наивысшим приоритетом среди ожидающих
+    if (!waitingTasks.empty()) {
+      auto highestPriorityTask = *std::max_element(
+          waitingTasks.begin(), waitingTasks.end(),
+          [](Task *a, Task *b) { return a->getPriority() < b->getPriority(); });
+
+      waitingTasks.erase(std::remove(waitingTasks.begin(), waitingTasks.end(),
+                                     highestPriorityTask),
+                         waitingTasks.end());
+
+      highestPriorityTask->setReady(true);
+      logger.logEvent("Task " + std::to_string(highestPriorityTask->getId()) +
+                      " woken up after semaphore release");
+    }
+
+    logger.logEvent("Task " + std::to_string(task->getId()) +
+                    " released semaphore");
+  }
+}
+
+Task *Semaphore::getOwner() const { return owner; }
+
+} // namespace RTOS
+===== КОНЕЦ ФАЙЛА: ./src/semaphore.cpp =====
+
+
+===== ФАЙЛ: ./src/system_log.cpp =====
+// system_log.cpp
+#include "../include/system_log.h"
+
+namespace RTOS {
+
+void SystemLog::logEvent(const std::string &eventDescription) {
+  std::lock_guard<std::mutex> lock(logMutex);
+  auto now = std::chrono::system_clock::now();
+  auto time = std::chrono::system_clock::to_time_t(now);
+
+  std::string timeStr = std::ctime(&time);
+  if (!timeStr.empty() && timeStr.back() == '\n') {
+    timeStr.pop_back();
+  }
+
+  eventLog.push_back("[" + timeStr + "] " + eventDescription);
+}
+
+const std::vector<std::string> &SystemLog::getLog() const { return eventLog; }
+
+void SystemLog::clearLog() {
+  std::lock_guard<std::mutex> lock(logMutex);
+  eventLog.clear();
+}
+
+} // namespace RTOS
+===== КОНЕЦ ФАЙЛА: ./src/system_log.cpp =====
+
+
+===== ФАЙЛ: ./src/task.cpp =====
+// task.cpp
+#include "../include/task.h"
+#include "../include/event.h"
+
+namespace RTOS {
+
+Task::Task(int id, int priority, int period, std::function<void()> func)
+    : id(id), priority(priority), period(period), ready(true),
+      taskFunction(func) {}
+
+int Task::getId() const { return id; }
+
+int Task::getPriority() const { return priority; }
+
+void Task::setPriority(int newPriority) { priority = newPriority; }
+
+int Task::getPeriod() const { return period; }
+
+bool Task::isReady() const { return ready; }
+
+void Task::setReady(bool state) { ready = state; }
+
+void Task::execute() {
+  if (taskFunction) {
+    taskFunction();
+  }
+}
+
+void Task::addEvent(Event *event) { ownedEvents.push_back(event); }
+
+std::vector<Event *> &Task::getEvents() { return ownedEvents; }
+
+} // namespace RTOS
+===== КОНЕЦ ФАЙЛА: ./src/task.cpp =====
+
+
+===== ФАЙЛ: ./tests/CMakeLists.txt =====
+# tests/CMakeLists.txt
+add_executable(test_limits test_limits.cpp)
+target_link_libraries(test_limits rtos_lib)
+
+add_executable(test_rma test_rma.cpp)
+target_link_libraries(test_rma rtos_lib)
+
+add_executable(test_nonpreemptive test_nonpreemptive.cpp)
+target_link_libraries(test_nonpreemptive rtos_lib)
+
+add_executable(test_events test_events.cpp)
+target_link_libraries(test_events rtos_lib)
+
+add_test(NAME test_limits COMMAND test_limits)
+add_test(NAME test_rma COMMAND test_rma)
+add_test(NAME test_nonpreemptive COMMAND test_nonpreemptive)
+add_test(NAME test_events COMMAND test_events)
+===== КОНЕЦ ФАЙЛА: ./tests/CMakeLists.txt =====
+
+
+===== ФАЙЛ: ./tests/main_test.cpp =====
+// main_test.cpp
+#include "../include/rtos.h"
+#include <cassert>
+#include <iostream>
+
+// Прототипы тестовых функций
+void testMaximumLimits();
+void testRMAPriorityAssignment();
+void testNonpreemptiveScheduling();
+void testPriorityInheritanceProtocol();
+void testEventManagement();
+
+int main() {
+  std::cout << "Запуск тестов RTOS..." << std::endl;
+
+  testMaximumLimits();
+  std::cout << "Тест максимальных ограничений: ПРОЙДЕН" << std::endl;
+
+  testRMAPriorityAssignment();
+  std::cout << "Тест назначения приоритетов RMA: ПРОЙДЕН" << std::endl;
+
+  testNonpreemptiveScheduling();
+  std::cout << "Тест планирования без вытеснения: ПРОЙДЕН" << std::endl;
+
+  testEventManagement();
+  std::cout << "Тест управления событиями: ПРОЙДЕН" << std::endl;
+
+  std::cout << "Все тесты ПРОЙДЕНЫ!" << std::endl;
+  return 0;
+}
+===== КОНЕЦ ФАЙЛА: ./tests/main_test.cpp =====
+
+
+===== ФАЙЛ: ./tests/test_events.cpp =====
+// test_events.cpp
+#include "../include/rtos.h"
+#include <cassert>
+#include <chrono>
+#include <thread>
+
+void testEventManagement() {
+  RTOS::Scheduler scheduler;
+
+  bool task2Executed = false;
+
+  auto task1 = scheduler.createTask(1, 100, []() {});
+  auto task2 = scheduler.createTask(0, 200, [&]() { task2Executed = true; });
+
+  auto event = scheduler.createEvent(task1);
+
+  // Task2 ожидает событие
+  event->waitFor(task2);
+  assert(!task2->isReady());
+
+  // Task1 активирует событие
+  event->trigger();
+  assert(task2->isReady());
+
+  scheduler.start();
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  scheduler.stop();
+
+  assert(task2Executed);
+}
+===== КОНЕЦ ФАЙЛА: ./tests/test_events.cpp =====
+
+
+===== ФАЙЛ: ./tests/test_limits.cpp =====
+// test_limits.cpp
+#include "../include/rtos.h"
+#include <cassert>
+
+void testMaximumLimits() {
+  RTOS::Scheduler scheduler;
+
+  // Тест максимального количества задач (32)
+  for (int i = 0; i < RTOS::MAX_TASKS; ++i) {
+    auto task = scheduler.createTask(0, 100, []() {});
+    assert(task != nullptr);
+  }
+  auto extraTask = scheduler.createTask(0, 100, []() {});
+  assert(extraTask == nullptr);
+
+  // Тест максимального количества семафоров (16)
+  for (int i = 0; i < RTOS::MAX_RESOURCES; ++i) {
+    auto semaphore = scheduler.createSemaphore();
+    assert(semaphore != nullptr);
+  }
+  auto extraSemaphore = scheduler.createSemaphore();
+  assert(extraSemaphore == nullptr);
+
+  // Тест максимального количества событий (16)
+  auto task = scheduler.getTasks()[0];
+  for (int i = 0; i < RTOS::MAX_EVENTS; ++i) {
+    auto event = scheduler.createEvent(task);
+    assert(event != nullptr);
+  }
+  auto extraEvent = scheduler.createEvent(task);
+  assert(extraEvent == nullptr);
+}
+===== КОНЕЦ ФАЙЛА: ./tests/test_limits.cpp =====
+
+
+===== ФАЙЛ: ./tests/test_nonpreemptive.cpp =====
+// test_nonpreemptive.cpp
+#include "../include/rtos.h"
+#include <cassert>
+#include <chrono>
+#include <thread>
+
+void testNonpreemptiveScheduling() {
+  RTOS::Scheduler scheduler;
+  RTOS::SystemLog &logger = RTOS::SystemLog::getInstance();
+  logger.clearLog();
+
+  bool task1Completed = false;
+  bool task2Started = false;
+
+  // Создаем task1 с большим периодом (низкий приоритет по RMA)
+  auto task1 = scheduler.createTask(0, 200, [&]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    task1Completed = true;
+  });
+
+  // Создаем task2 с меньшим периодом (высокий приоритет по RMA)
+  auto task2 = scheduler.createTask(0, 100, [&]() { task2Started = true; });
+
+  // Устанавливаем task1 в готовое состояние, а task2 - в неготовое
+  task1->setReady(true);
+  task2->setReady(false);
+
+  scheduler.start();
+
+  // Даем task1 начать выполнение
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+  // Теперь делаем task2 готовой к выполнению
+  task2->setReady(true);
+
+  // Ждем достаточное время для завершения обеих задач
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  scheduler.stop();
+
+  // При планировании без вытеснения task1 должен завершиться до начала task2,
+  // даже если task2 имеет более высокий приоритет
+  assert(task1Completed);
+  assert(task2Started);
+}
+===== КОНЕЦ ФАЙЛА: ./tests/test_nonpreemptive.cpp =====
+
+
+===== ФАЙЛ: ./tests/test_rma.cpp =====
+// test_rma.cpp
+#include "../include/rtos.h"
+#include <cassert>
+#include <chrono>
+#include <thread>
+
+void testRMAPriorityAssignment() {
+  RTOS::Scheduler scheduler;
+
+  auto task1 = scheduler.createTask(0, 100, []() {}); // Период 100
+  auto task2 = scheduler.createTask(0, 50, []() {});  // Период 50
+  auto task3 = scheduler.createTask(0, 200, []() {}); // Период 200
+
+  scheduler.start();
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  scheduler.stop();
+
+  // По RMA, задачи с меньшим периодом должны иметь более высокий приоритет
+  assert(task2->getPriority() > task1->getPriority());
+  assert(task1->getPriority() > task3->getPriority());
+}
+===== КОНЕЦ ФАЙЛА: ./tests/test_rma.cpp =====
+
